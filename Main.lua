@@ -303,6 +303,7 @@ ThemeBtn.TextSize = 12
 ThemeBtn.Parent = RightPanel
 Instance.new("UICorner", ThemeBtn).CornerRadius = UDim.new(0, 8)
 
+-- Body Part Selector
 local BodyPartBtn = Instance.new("TextButton")
 BodyPartBtn.Size = UDim2.new(1, 0, 0, 34)
 BodyPartBtn.Position = UDim2.new(0, 0, 0, 74)
@@ -314,6 +315,7 @@ BodyPartBtn.TextSize = 12
 BodyPartBtn.Parent = RightPanel
 Instance.new("UICorner", BodyPartBtn).CornerRadius = UDim.new(0, 8)
 
+-- FOV Thickness Input Box
 local FovThicknessBox = Instance.new("TextBox")
 FovThicknessBox.Size = UDim2.new(1, 0, 0, 34)
 FovThicknessBox.Position = UDim2.new(0, 0, 0, 113)
@@ -325,6 +327,7 @@ FovThicknessBox.TextSize = 12
 FovThicknessBox.Parent = RightPanel
 Instance.new("UICorner", FovThicknessBox).CornerRadius = UDim.new(0, 8)
 
+-- FOV Transparency Input Box
 local FovTransBox = Instance.new("TextBox")
 FovTransBox.Size = UDim2.new(1, 0, 0, 34)
 FovTransBox.Position = UDim2.new(0, 0, 0, 152)
@@ -336,6 +339,7 @@ FovTransBox.TextSize = 12
 FovTransBox.Parent = RightPanel
 Instance.new("UICorner", FovTransBox).CornerRadius = UDim.new(0, 8)
 
+-- Target Highlight Toggle
 local HighlightBtn = Instance.new("TextButton")
 HighlightBtn.Size = UDim2.new(1, 0, 0, 34)
 HighlightBtn.Position = UDim2.new(0, 0, 0, 191)
@@ -435,21 +439,35 @@ makeDraggable(MainFrame)
 makeDraggable(DragToggleButton)
 
 --------------------------------------------------------------------------------
--- BODY PART RESOLVER
+-- BODY PART RESOLVER (R6 & R15 SUPPORT)
 --------------------------------------------------------------------------------
 local function getCharacterTargetPart(character)
 	if not character then return nil end
 
 	if selectedBodyPart == "Head" then
 		return character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
+
 	elseif selectedBodyPart == "Torso" then
-		return character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso") or character:FindFirstChild("HumanoidRootPart")
+		return character:FindFirstChild("UpperTorso") 
+			or character:FindFirstChild("Torso") 
+			or character:FindFirstChild("HumanoidRootPart")
+
 	elseif selectedBodyPart == "HumanoidRootPart" then
 		return character:FindFirstChild("HumanoidRootPart")
+
 	elseif selectedBodyPart == "Legs" then
-		return character:FindFirstChild("RightUpperLeg") or character:FindFirstChild("Right Leg") or character:FindFirstChild("LeftUpperLeg") or character:FindFirstChild("Left Leg") or character:FindFirstChild("HumanoidRootPart")
+		return character:FindFirstChild("RightUpperLeg") 
+			or character:FindFirstChild("Right Leg") 
+			or character:FindFirstChild("LeftUpperLeg") 
+			or character:FindFirstChild("Left Leg") 
+			or character:FindFirstChild("HumanoidRootPart")
+
 	elseif selectedBodyPart == "Arms" then
-		return character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm") or character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm") or character:FindFirstChild("HumanoidRootPart")
+		return character:FindFirstChild("RightUpperArm") 
+			or character:FindFirstChild("Right Arm") 
+			or character:FindFirstChild("LeftUpperArm") 
+			or character:FindFirstChild("Left Arm") 
+			or character:FindFirstChild("HumanoidRootPart")
 	end
 
 	return character:FindFirstChild("HumanoidRootPart")
