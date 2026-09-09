@@ -516,7 +516,7 @@ local function getValidTargets()
 						WorldDistance = worldDistance,
 						ScreenDistance = screenDist,
 						IsBehind = isBehind,
-						OnScreen = onScreen
+						OnScreen = onScreen and not isBehind
 					})
 				end
 			end
@@ -525,191 +525,242 @@ local function getValidTargets()
 	return targets
 end
 
-local function updateTarget()
+local function selectBestTarget()
 	local targets = getValidTargets()
-	local bestTarget = nil
-	local bestMetric = math.huge
+	if #targets == 0 then return nil end
 
-	-- Check Rear Threat Filter First
 	if rearThreatEnabled then
-		for _, entry in ipairs(targets) do
-			if entry.IsBehind and entry.WorldDistance <= rearDistanceThreshold then
-				if entry.WorldDistance < bestMetric then
-					bestMetric = entry.WorldDistance
-					bestTarget = entry
-				end
+		local closeRearTargets = {}
+		for _, t in ipairs(targets) do
+			if t.IsBehind and t.WorldDistance <= rearDistanceThreshold then
+				table.insert(closeRearTargets, t)
 			end
+		end
+		if #closeRearTargets > 0 then
+			table.sort(closeRearTargets, function(a, b) return a.WorldDistance < b.WorldDistance end)
+			return closeRearTargets[1]
 		end
 	end
 
-	-- Standard Targeting Logic
-	if not bestTarget then
-		for _, entry in ipairs(targets) do
-			if entry.OnScreen and entry.ScreenDistance <= fovRadius then
-				if currentPriority == "Closest" then
-					if entry.ScreenDistance < bestMetric then
-						bestMetric = entry.ScreenDistance
-						bestTarget = entry
-					end
-				elseif currentPriority == "Lowest Health" then
-					if entry.Humanoid.Health < bestMetric then
-						bestMetric = entry.Humanoid.Health
-						bestTarget = entry
-					end
-				elseif currentPriority == "Distance" then
-					if entry.WorldDistance < bestMetric then
-						bestMetric = entry.WorldDistance
-						bestTarget = entry
-					end
-				end
-			end
+	local fovTargets = {}
+	for _, t in ipairs(targets) do
+		if t.OnScreen and t.ScreenDistance <= fovRadius then
+			table.insert(fovTargets, t)
 		end
 	end
 
-	if bestTarget then
-		currentTarget = bestTarget.Part
-		if targetHighlightEnabled and bestTarget.Player.Character then
-			currentHighlight.Adornee = bestTarget.Player.Character
-			currentHighlight.FillColor = COLOR_ACCENT
-			currentHighlight.OutlineColor = COLOR_TEXT
-			currentHighlight.Parent = bestTarget.Player.Character
+	if #fovTargets == 0 then return nil end
+
+	if currentPriority == "Closest" then
+		table.sort(fovTargets, function(a, b) return a.WorldDistance < b.WorldDistance end)
+		return fovTargets[1]
+	elseif currentPriority == "Longest" then
+		table.sort(fovTargets, function(a, b) return a.WorldDistance > b.WorldDistance end)
+		return fovTargets[1]
+	elseif currentPriority == "Medium" then
+		table.sort(fovTargets, function(a, b) return a.WorldDistance < b.WorldDistance end)
+		local midIndex = math.ceil(#fovTargets / 2)
+		return fovTargets[midIndex]
+	end
+
+	return nil
+end
+
+RunService.RenderStepped:Connect(function()
+	Camera = workspace.CurrentCamera or Camera
+	if aimLockEnabled and Camera then
+		FovCanvas.Position = UDim2.new(0, Camera.ViewportSize.X / 2, 0, Camera.ViewportSize.Y / 2)
+		
+		-- Validate active target (reset if dead, missing, or health <= 0)
+		if currentTarget then
+			local char = currentTarget.Parent
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not char or not hum or hum.Health <= 0 then
+				clearTargetAndHighlight()
+			end
+		end
+
+		local targetData = selectBestTarget()
+
+		if targetData and targetData.Part and targetData.Part.Parent then
+			-- Switch or update target reference
+			currentTarget = targetData.Part
+			local camPos = Camera.CFrame.Position
+			local targetPos = currentTarget.Position
+			
+			if (targetPos - camPos).Magnitude > 0.001 then
+				local targetCFrame = CFrame.lookAt(camPos, targetPos)
+				Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, cameraSmoothness)
+			end
+
+			-- Dynamic Highlight Sync
+			if targetHighlightEnabled and targetData.Player.Character then
+				if currentHighlight.Adornee ~= targetData.Player.Character or currentHighlight.Parent == nil then
+					currentHighlight.Adornee = targetData.Player.Character
+					currentHighlight.FillColor = COLOR_ACCENT
+					currentHighlight.OutlineColor = COLOR_TEXT
+					currentHighlight.Parent = ScreenGui
+				end
+			else
+				currentHighlight.Parent = nil
+				currentHighlight.Adornee = nil
+			end
 		else
-			currentHighlight.Parent = nil
+			clearTargetAndHighlight()
 		end
 	else
+		clearTargetAndHighlight()
+	end
+end)
+
+--------------------------------------------------------------------------------
+-- HANDLERS & SEPARATE BUTTON TOGGLER
+--------------------------------------------------------------------------------
+local function syncLockState(enabled)
+	aimLockEnabled = enabled
+	FovCanvas.Visible = aimLockEnabled
+	ToggleBtn.Text = aimLockEnabled and "AIM LOCK: ON" or "AIM LOCK: OFF"
+	ToggleBtn.BackgroundColor3 = aimLockEnabled and COLOR_ON or COLOR_OFF
+	if separateLockBtn then
+		separateLockBtn.Text = aimLockEnabled and "LOCK: ON" or "LOCK: OFF"
+		separateLockBtn.BackgroundColor3 = aimLockEnabled and COLOR_ON or COLOR_OFF
+	end
+	if not aimLockEnabled then 
 		clearTargetAndHighlight()
 	end
 end
 
---------------------------------------------------------------------------------
--- MAIN RENDER LOOP & AIM LOCK EXECUTION
---------------------------------------------------------------------------------
-RunService.RenderStepped:Connect(function()
-	Camera = workspace.CurrentCamera or Camera
-	if not Camera then return end
-
-	-- Position FOV Circle in Viewport Center
-	local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
-	FovCanvas.Position = UDim2.new(0, viewportCenter.X, 0, viewportCenter.Y)
-
-	if aimLockEnabled then
-		updateTarget()
-		if currentTarget and currentTarget.Parent then
-			local targetCFrame = CFrame.new(Camera.CFrame.Position, currentTarget.Position)
-			Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, cameraSmoothness)
-		end
-	else
-		clearTargetAndHighlight()
-	end
-end)
-
---------------------------------------------------------------------------------
--- UI INTERACTION LOGIC & EVENT CONNECTIONS
---------------------------------------------------------------------------------
-ToggleBtn.MouseButton1Click:Connect(function()
-	aimLockEnabled = not aimLockEnabled
-	FovCanvas.Visible = aimLockEnabled
-	ToggleBtn.BackgroundColor3 = aimLockEnabled and COLOR_ON or COLOR_OFF
-	ToggleBtn.Text = aimLockEnabled and "AIM LOCK: ON" or "AIM LOCK: OFF"
-	if separateLockBtn then
-		separateLockBtn.BackgroundColor3 = ToggleBtn.BackgroundColor3
-		separateLockBtn.Text = ToggleBtn.Text
-	end
-end)
-
-PriorityBtn.MouseButton1Click:Connect(function()
-	if currentPriority == "Closest" then
-		currentPriority = "Lowest Health"
-	elseif currentPriority == "Lowest Health" then
-		currentPriority = "Distance"
-	else
-		currentPriority = "Closest"
-	end
+local function syncPriorityState()
+	if currentPriority == "Closest" then currentPriority = "Medium"
+	elseif currentPriority == "Medium" then currentPriority = "Longest"
+	else currentPriority = "Closest" end
+	
 	PriorityBtn.Text = "Priority: " .. currentPriority
-	if separatePriorityBtn then separatePriorityBtn.Text = PriorityBtn.Text end
-end)
+	if separatePriorityBtn then separatePriorityBtn.Text = "Priority: " .. currentPriority end
+end
 
-RearToggleBtn.MouseButton1Click:Connect(function()
-	rearThreatEnabled = not rearThreatEnabled
-	RearToggleBtn.BackgroundColor3 = rearThreatEnabled and COLOR_ON or COLOR_OFF
+local function syncRearState(enabled)
+	rearThreatEnabled = enabled
 	RearToggleBtn.Text = rearThreatEnabled and "REAR THREAT: ON" or "REAR THREAT: OFF"
+	RearToggleBtn.BackgroundColor3 = rearThreatEnabled and COLOR_ON or COLOR_OFF
 	if separateRearBtn then
-		separateRearBtn.BackgroundColor3 = RearToggleBtn.BackgroundColor3
-		separateRearBtn.Text = RearToggleBtn.Text
+		separateRearBtn.Text = rearThreatEnabled and "REAR: ON" or "REAR: OFF"
+		separateRearBtn.BackgroundColor3 = rearThreatEnabled and COLOR_ON or COLOR_OFF
 	end
-end)
+end
+
+local function createStandaloneButton(title, defaultText, color, onClickCallback)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(0, 140, 0, 38)
+	btn.Position = UDim2.new(0.5, 20, 0.4, 0)
+	btn.BackgroundColor3 = color or COLOR_BG
+	btn.TextColor3 = COLOR_TEXT
+	btn.Text = defaultText
+	btn.Font = FONT_BOLD
+	btn.TextSize = 11
+	btn.Parent = ScreenGui
+
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+	applyGlow(btn, COLOR_ACCENT, 1.5)
+	makeDraggable(btn)
+
+	btn.MouseButton1Click:Connect(onClickCallback)
+	return btn
+end
+
+ToggleBtn.MouseButton1Click:Connect(function() syncLockState(not aimLockEnabled) end)
+PriorityBtn.MouseButton1Click:Connect(function() syncPriorityState() end)
+RearToggleBtn.MouseButton1Click:Connect(function() syncRearState(not rearThreatEnabled) end)
 
 FovBox.FocusLost:Connect(function()
-	local num = tonumber(FovBox.Text:match("%d+"))
-	if num then
-		fovRadius = math.clamp(num, 30, 800)
-	end
+	local val = tonumber(FovBox.Text:match("[%d%.]+"))
+	if val then fovRadius = math.clamp(val, 50, 600) end
 	FovBox.Text = "FOV Radius: " .. tostring(fovRadius)
+	if separateFovBtn then separateFovBtn.Text = "FOV: " .. tostring(fovRadius) end
 	updateFovCircle()
 end)
 
 RearDistBox.FocusLost:Connect(function()
-	local num = tonumber(RearDistBox.Text:match("%d+"))
-	if num then
-		rearDistanceThreshold = math.clamp(num, 10, 300)
-	end
+	local val = tonumber(RearDistBox.Text:match("[%d%.]+"))
+	if val then rearDistanceThreshold = math.clamp(val, 10, 300) end
 	RearDistBox.Text = "Trigger Distance: " .. tostring(rearDistanceThreshold) .. " studs"
 end)
 
--- Customization Panel Interactions
-BodyPartBtn.MouseButton1Click:Connect(function()
-	if selectedBodyPart == "Head" then
-		selectedBodyPart = "Torso"
-	elseif selectedBodyPart == "Torso" then
-		selectedBodyPart = "HumanoidRootPart"
-	elseif selectedBodyPart == "HumanoidRootPart" then
-		selectedBodyPart = "Legs"
-	elseif selectedBodyPart == "Legs" then
-		selectedBodyPart = "Arms"
+local dropdownOpen = false
+DropHeader.MouseButton1Click:Connect(function()
+	dropdownOpen = not dropdownOpen
+	local targetSize = dropdownOpen and UDim2.new(1, 0, 0, 170) or UDim2.new(1, 0, 0, 34)
+	DropHeader.Text = dropdownOpen and "Separate Button Creator  ▲" or "Separate Button Creator  ▼"
+	TweenService:Create(DropdownContainer, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Size = targetSize}):Play()
+end)
+
+optLock.MouseButton1Click:Connect(function()
+	if separateLockBtn then
+		separateLockBtn:Destroy()
+		separateLockBtn = nil
+		optLock.Text = "• Quick Aim Lock Toggle"
 	else
-		selectedBodyPart = "Head"
+		separateLockBtn = createStandaloneButton("Lock", aimLockEnabled and "LOCK: ON" or "LOCK: OFF", aimLockEnabled and COLOR_ON or COLOR_OFF, function()
+			syncLockState(not aimLockEnabled)
+		end)
+		optLock.Text = "• Quick Aim Lock Toggle [REMOVE]"
 	end
-	BodyPartBtn.Text = "Aim Part: " .. selectedBodyPart
 end)
 
-FovThicknessBox.FocusLost:Connect(function()
-	local num = tonumber(FovThicknessBox.Text:match("[%d%.]+"))
-	if num then fovThickness = math.clamp(num, 0.5, 10) end
-	FovThicknessBox.Text = "FOV Thickness: " .. tostring(fovThickness)
-	updateFovCircle()
+optPriority.MouseButton1Click:Connect(function()
+	if separatePriorityBtn then
+		separatePriorityBtn:Destroy()
+		separatePriorityBtn = nil
+		optPriority.Text = "• Target Priority Switch"
+	else
+		separatePriorityBtn = createStandaloneButton("Priority", "Priority: " .. currentPriority, COLOR_SURFACE, function()
+			syncPriorityState()
+		end)
+		optPriority.Text = "• Target Priority Switch [REMOVE]"
+	end
 end)
 
-FovTransBox.FocusLost:Connect(function()
-	local num = tonumber(FovTransBox.Text:match("%d+"))
-	if num then fovTransparency = math.clamp(num, 0, 100) end
-	FovTransBox.Text = "FOV Transparency: " .. tostring(fovTransparency) .. "%"
-	updateFovCircle()
+optRear.MouseButton1Click:Connect(function()
+	if separateRearBtn then
+		separateRearBtn:Destroy()
+		separateRearBtn = nil
+		optRear.Text = "• Rear Threat Toggle"
+	else
+		separateRearBtn = createStandaloneButton("Rear", rearThreatEnabled and "REAR: ON" or "REAR: OFF", rearThreatEnabled and COLOR_ON or COLOR_OFF, function()
+			syncRearState(not rearThreatEnabled)
+		end)
+		optRear.Text = "• Rear Threat Toggle [REMOVE]"
+	end
 end)
 
-HighlightBtn.MouseButton1Click:Connect(function()
-	targetHighlightEnabled = not targetHighlightEnabled
-	HighlightBtn.BackgroundColor3 = targetHighlightEnabled and COLOR_ON or COLOR_OFF
-	HighlightBtn.Text = targetHighlightEnabled and "TARGET HIGHLIGHT: ON" or "TARGET HIGHLIGHT: OFF"
-end)
-
-SmoothnessBtn.MouseButton1Click:Connect(function()
-	cameraSmoothness = cameraSmoothness + 0.15
-	if cameraSmoothness > 1 then cameraSmoothness = 0.15 end
-	SmoothnessBtn.Text = "Camera Smoothness: " .. string.format("%.2f", cameraSmoothness)
+optFov.MouseButton1Click:Connect(function()
+	if separateFovBtn then
+		separateFovBtn:Destroy()
+		separateFovBtn = nil
+		optFov.Text = "• Dynamic FOV Toggle"
+	else
+		separateFovBtn = createStandaloneButton("FOV", "FOV: " .. tostring(fovRadius), COLOR_SURFACE, function()
+			fovRadius = fovRadius + 100
+			if fovRadius > 600 then fovRadius = 100 end
+			FovBox.Text = "FOV Radius: " .. tostring(fovRadius)
+			separateFovBtn.Text = "FOV: " .. tostring(fovRadius)
+			updateFovCircle()
+		end)
+		optFov.Text = "• Dynamic FOV Toggle [REMOVE]"
+	end
 end)
 
 ThemeBtn.MouseButton1Click:Connect(function()
 	currentColorIndex = (currentColorIndex % #COLOR_PALETTES) + 1
-	local palette = COLOR_PALETTES[currentColorIndex]
-	COLOR_ACCENT = palette.Accent
-	COLOR_BG = palette.Bg
-	COLOR_SURFACE = palette.Surface
+	local pal = COLOR_PALETTES[currentColorIndex]
+	COLOR_BG = pal.Bg
+	COLOR_SURFACE = pal.Surface
+	COLOR_ACCENT = pal.Accent
 
-	ThemeBtn.Text = "Theme: " .. palette.Name
 	MainFrame.BackgroundColor3 = COLOR_BG
 	LeftTitle.TextColor3 = COLOR_ACCENT
 	RightTitle.TextColor3 = COLOR_ACCENT
-	DragToggleButton.TextColor3 = COLOR_ACCENT
+	ThemeBtn.Text = "Theme: " .. pal.Name
 
 	for _, stroke in ipairs(allStrokes) do
 		stroke.Color = COLOR_ACCENT
@@ -717,83 +768,74 @@ ThemeBtn.MouseButton1Click:Connect(function()
 	updateFovCircle()
 end)
 
--- Dropdown Menu Expand / Collapse Logic
-local dropdownExpanded = false
-DropHeader.MouseButton1Click:Connect(function()
-	dropdownExpanded = not dropdownExpanded
-	local targetSize = dropdownExpanded and UDim2.new(1, 0, 0, 170) or UDim2.new(1, 0, 0, 34)
-	TweenService:Create(DropdownContainer, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Size = targetSize}):Play()
-	DropHeader.Text = dropdownExpanded and "Separate Button Creator  ▲" or "Separate Button Creator  ▼"
+-- Body Part Switcher
+BodyPartBtn.MouseButton1Click:Connect(function()
+	if selectedBodyPart == "Head" then selectedBodyPart = "Torso"
+	elseif selectedBodyPart == "Torso" then selectedBodyPart = "HumanoidRootPart"
+	elseif selectedBodyPart == "HumanoidRootPart" then selectedBodyPart = "Legs"
+	elseif selectedBodyPart == "Legs" then selectedBodyPart = "Arms"
+	else selectedBodyPart = "Head" end
+
+	BodyPartBtn.Text = "Aim Part: " .. selectedBodyPart
 end)
 
--- Separate Mobile Floating Button Creator Function
-local function createSeparateButton(titleText, defaultColor, onClickCallback)
-	local sepBtn = Instance.new("TextButton")
-	sepBtn.Size = UDim2.new(0, 140, 0, 36)
-	sepBtn.Position = UDim2.new(0.8, 0, 0.2, 0)
-	sepBtn.BackgroundColor3 = defaultColor
-	sepBtn.TextColor3 = COLOR_TEXT
-	sepBtn.Text = titleText
-	sepBtn.Font = FONT_BOLD
-	sepBtn.TextSize = 11
-	sepBtn.Parent = ScreenGui
-	Instance.new("UICorner", sepBtn).CornerRadius = UDim.new(0, 8)
-	applyGlow(sepBtn, COLOR_ACCENT, 1)
-	makeDraggable(sepBtn)
+-- FOV Thickness Input Focus
+FovThicknessBox.FocusLost:Connect(function()
+	local val = tonumber(FovThicknessBox.Text:match("[%d%.]+"))
+	if val then fovThickness = math.clamp(val, 1, 10) end
+	FovThicknessBox.Text = "FOV Thickness: " .. tostring(fovThickness)
+	updateFovCircle()
+end)
 
-	sepBtn.MouseButton1Click:Connect(onClickCallback)
-	return sepBtn
-end
+-- FOV Transparency Input Focus
+FovTransBox.FocusLost:Connect(function()
+	local val = tonumber(FovTransBox.Text:match("[%d%.]+"))
+	if val then fovTransparency = math.clamp(val, 0, 100) end
+	FovTransBox.Text = "FOV Transparency: " .. tostring(fovTransparency) .. "%"
+	updateFovCircle()
+end)
 
-optLock.MouseButton1Click:Connect(function()
-	if not separateLockBtn then
-		separateLockBtn = createSeparateButton(ToggleBtn.Text, ToggleBtn.BackgroundColor3, function()
-			ToggleBtn.MouseButton1Click:Fire()
-		end)
+-- Target Highlight Handler
+HighlightBtn.MouseButton1Click:Connect(function()
+	targetHighlightEnabled = not targetHighlightEnabled
+	HighlightBtn.Text = targetHighlightEnabled and "TARGET HIGHLIGHT: ON" or "TARGET HIGHLIGHT: OFF"
+	HighlightBtn.BackgroundColor3 = targetHighlightEnabled and COLOR_ON or COLOR_OFF
+	if not targetHighlightEnabled then
+		clearTargetAndHighlight()
 	end
 end)
 
-optPriority.MouseButton1Click:Connect(function()
-	if not separatePriorityBtn then
-		separatePriorityBtn = createSeparateButton(PriorityBtn.Text, COLOR_SURFACE, function()
-			PriorityBtn.MouseButton1Click:Fire()
-		end)
-	end
+SmoothnessBtn.MouseButton1Click:Connect(function()
+	cameraSmoothness = cameraSmoothness + 0.15
+	if cameraSmoothness > 1.0 then cameraSmoothness = 0.1 end
+	SmoothnessBtn.Text = "Camera Smoothness: " .. string.format("%.2f", cameraSmoothness)
 end)
 
-optRear.MouseButton1Click:Connect(function()
-	if not separateRearBtn then
-		separateRearBtn = createSeparateButton(RearToggleBtn.Text, RearToggleBtn.BackgroundColor3, function()
-			RearToggleBtn.MouseButton1Click:Fire()
-		end)
-	end
-end)
-
-optFov.MouseButton1Click:Connect(function()
-	if not separateFovBtn then
-		separateFovBtn = createSeparateButton("FOV: Visible", COLOR_SURFACE, function()
-			FovCanvas.Visible = not FovCanvas.Visible
-			separateFovBtn.Text = FovCanvas.Visible and "FOV: Visible" or "FOV: Hidden"
-		end)
-	end
-end)
-
--- Menu Toggle Button Logic
 DragToggleButton.MouseButton1Click:Connect(function()
 	MainFrame.Visible = not MainFrame.Visible
 end)
 
 --------------------------------------------------------------------------------
--- LOADING SCREEN ANIMATION
+-- LOADING TIMINGS
 --------------------------------------------------------------------------------
-task.spawn(function()
-	local tween = TweenService:Create(ProgressBar, TweenInfo.new(1.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Size = UDim2.new(1, 0, 1, 0)
-	})
-	tween:Play()
-	tween.Completed:Wait()
+local function runLoadingSequence()
+	local stages = {
+		{ pct = 0.20, text = "20%: implementing aim lock...", waitTime = 0.8 },
+		{ pct = 0.40, text = "40%: searching for players...", waitTime = 0.8 },
+		{ pct = 0.60, text = "60%: targeting player locations....", waitTime = 0.8 },
+		{ pct = 0.80, text = "80%: finalizing...", waitTime = 0.8 },
+		{ pct = 1.00, text = "100%: Done!", waitTime = 0.5 }
+	}
 
-	LoadingFrame.Visible = false
+	for _, stage in ipairs(stages) do
+		LoadingLabel.Text = stage.text
+		TweenService:Create(ProgressBar, TweenInfo.new(0.25), { Size = UDim2.new(stage.pct, 0, 1, 0) }):Play()
+		task.wait(stage.waitTime)
+	end
+
+	LoadingFrame:Destroy()
 	MainFrame.Visible = true
 	DragToggleButton.Visible = true
-end)
+end
+
+task.spawn(runLoadingSequence)
