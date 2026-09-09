@@ -303,7 +303,6 @@ ThemeBtn.TextSize = 12
 ThemeBtn.Parent = RightPanel
 Instance.new("UICorner", ThemeBtn).CornerRadius = UDim.new(0, 8)
 
--- Body Part Selector
 local BodyPartBtn = Instance.new("TextButton")
 BodyPartBtn.Size = UDim2.new(1, 0, 0, 34)
 BodyPartBtn.Position = UDim2.new(0, 0, 0, 74)
@@ -315,7 +314,6 @@ BodyPartBtn.TextSize = 12
 BodyPartBtn.Parent = RightPanel
 Instance.new("UICorner", BodyPartBtn).CornerRadius = UDim.new(0, 8)
 
--- FOV Thickness Input Box
 local FovThicknessBox = Instance.new("TextBox")
 FovThicknessBox.Size = UDim2.new(1, 0, 0, 34)
 FovThicknessBox.Position = UDim2.new(0, 0, 0, 113)
@@ -327,7 +325,6 @@ FovThicknessBox.TextSize = 12
 FovThicknessBox.Parent = RightPanel
 Instance.new("UICorner", FovThicknessBox).CornerRadius = UDim.new(0, 8)
 
--- FOV Transparency Input Box
 local FovTransBox = Instance.new("TextBox")
 FovTransBox.Size = UDim2.new(1, 0, 0, 34)
 FovTransBox.Position = UDim2.new(0, 0, 0, 152)
@@ -339,7 +336,6 @@ FovTransBox.TextSize = 12
 FovTransBox.Parent = RightPanel
 Instance.new("UICorner", FovTransBox).CornerRadius = UDim.new(0, 8)
 
--- Target Highlight Toggle
 local HighlightBtn = Instance.new("TextButton")
 HighlightBtn.Size = UDim2.new(1, 0, 0, 34)
 HighlightBtn.Position = UDim2.new(0, 0, 0, 191)
@@ -439,35 +435,21 @@ makeDraggable(MainFrame)
 makeDraggable(DragToggleButton)
 
 --------------------------------------------------------------------------------
--- BODY PART RESOLVER (R6 & R15 SUPPORT)
+-- BODY PART RESOLVER
 --------------------------------------------------------------------------------
 local function getCharacterTargetPart(character)
 	if not character then return nil end
 
 	if selectedBodyPart == "Head" then
 		return character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
-
 	elseif selectedBodyPart == "Torso" then
-		return character:FindFirstChild("UpperTorso") 
-			or character:FindFirstChild("Torso") 
-			or character:FindFirstChild("HumanoidRootPart")
-
+		return character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso") or character:FindFirstChild("HumanoidRootPart")
 	elseif selectedBodyPart == "HumanoidRootPart" then
 		return character:FindFirstChild("HumanoidRootPart")
-
 	elseif selectedBodyPart == "Legs" then
-		return character:FindFirstChild("RightUpperLeg") 
-			or character:FindFirstChild("Right Leg") 
-			or character:FindFirstChild("LeftUpperLeg") 
-			or character:FindFirstChild("Left Leg") 
-			or character:FindFirstChild("HumanoidRootPart")
-
+		return character:FindFirstChild("RightUpperLeg") or character:FindFirstChild("Right Leg") or character:FindFirstChild("LeftUpperLeg") or character:FindFirstChild("Left Leg") or character:FindFirstChild("HumanoidRootPart")
 	elseif selectedBodyPart == "Arms" then
-		return character:FindFirstChild("RightUpperArm") 
-			or character:FindFirstChild("Right Arm") 
-			or character:FindFirstChild("LeftUpperArm") 
-			or character:FindFirstChild("Left Arm") 
-			or character:FindFirstChild("HumanoidRootPart")
+		return character:FindFirstChild("RightUpperArm") or character:FindFirstChild("Right Arm") or character:FindFirstChild("LeftUpperArm") or character:FindFirstChild("Left Arm") or character:FindFirstChild("HumanoidRootPart")
 	end
 
 	return character:FindFirstChild("HumanoidRootPart")
@@ -516,4 +498,284 @@ local function getValidTargets()
 						WorldDistance = worldDistance,
 						ScreenDistance = screenDist,
 						IsBehind = isBehind,
-						OnScre
+						OnScreen = onScreen
+					})
+				end
+			end
+		end
+	end
+	return targets
+end
+
+local function updateTarget()
+	local targets = getValidTargets()
+	local bestTarget = nil
+	local bestMetric = math.huge
+
+	-- Check Rear Threat Filter First
+	if rearThreatEnabled then
+		for _, entry in ipairs(targets) do
+			if entry.IsBehind and entry.WorldDistance <= rearDistanceThreshold then
+				if entry.WorldDistance < bestMetric then
+					bestMetric = entry.WorldDistance
+					bestTarget = entry
+				end
+			end
+		end
+	end
+
+	-- Standard Targeting Logic
+	if not bestTarget then
+		for _, entry in ipairs(targets) do
+			if entry.OnScreen and entry.ScreenDistance <= fovRadius then
+				if currentPriority == "Closest" then
+					if entry.ScreenDistance < bestMetric then
+						bestMetric = entry.ScreenDistance
+						bestTarget = entry
+					end
+				elseif currentPriority == "Lowest Health" then
+					if entry.Humanoid.Health < bestMetric then
+						bestMetric = entry.Humanoid.Health
+						bestTarget = entry
+					end
+				elseif currentPriority == "Distance" then
+					if entry.WorldDistance < bestMetric then
+						bestMetric = entry.WorldDistance
+						bestTarget = entry
+					end
+				end
+			end
+		end
+	end
+
+	if bestTarget then
+		currentTarget = bestTarget.Part
+		if targetHighlightEnabled and bestTarget.Player.Character then
+			currentHighlight.Adornee = bestTarget.Player.Character
+			currentHighlight.FillColor = COLOR_ACCENT
+			currentHighlight.OutlineColor = COLOR_TEXT
+			currentHighlight.Parent = bestTarget.Player.Character
+		else
+			currentHighlight.Parent = nil
+		end
+	else
+		clearTargetAndHighlight()
+	end
+end
+
+--------------------------------------------------------------------------------
+-- MAIN RENDER LOOP & AIM LOCK EXECUTION
+--------------------------------------------------------------------------------
+RunService.RenderStepped:Connect(function()
+	Camera = workspace.CurrentCamera or Camera
+	if not Camera then return end
+
+	-- Position FOV Circle in Viewport Center
+	local viewportCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+	FovCanvas.Position = UDim2.new(0, viewportCenter.X, 0, viewportCenter.Y)
+
+	if aimLockEnabled then
+		updateTarget()
+		if currentTarget and currentTarget.Parent then
+			local targetCFrame = CFrame.new(Camera.CFrame.Position, currentTarget.Position)
+			Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, cameraSmoothness)
+		end
+	else
+		clearTargetAndHighlight()
+	end
+end)
+
+--------------------------------------------------------------------------------
+-- UI INTERACTION LOGIC & EVENT CONNECTIONS
+--------------------------------------------------------------------------------
+ToggleBtn.MouseButton1Click:Connect(function()
+	aimLockEnabled = not aimLockEnabled
+	FovCanvas.Visible = aimLockEnabled
+	ToggleBtn.BackgroundColor3 = aimLockEnabled and COLOR_ON or COLOR_OFF
+	ToggleBtn.Text = aimLockEnabled and "AIM LOCK: ON" or "AIM LOCK: OFF"
+	if separateLockBtn then
+		separateLockBtn.BackgroundColor3 = ToggleBtn.BackgroundColor3
+		separateLockBtn.Text = ToggleBtn.Text
+	end
+end)
+
+PriorityBtn.MouseButton1Click:Connect(function()
+	if currentPriority == "Closest" then
+		currentPriority = "Lowest Health"
+	elseif currentPriority == "Lowest Health" then
+		currentPriority = "Distance"
+	else
+		currentPriority = "Closest"
+	end
+	PriorityBtn.Text = "Priority: " .. currentPriority
+	if separatePriorityBtn then separatePriorityBtn.Text = PriorityBtn.Text end
+end)
+
+RearToggleBtn.MouseButton1Click:Connect(function()
+	rearThreatEnabled = not rearThreatEnabled
+	RearToggleBtn.BackgroundColor3 = rearThreatEnabled and COLOR_ON or COLOR_OFF
+	RearToggleBtn.Text = rearThreatEnabled and "REAR THREAT: ON" or "REAR THREAT: OFF"
+	if separateRearBtn then
+		separateRearBtn.BackgroundColor3 = RearToggleBtn.BackgroundColor3
+		separateRearBtn.Text = RearToggleBtn.Text
+	end
+end)
+
+FovBox.FocusLost:Connect(function()
+	local num = tonumber(FovBox.Text:match("%d+"))
+	if num then
+		fovRadius = math.clamp(num, 30, 800)
+	end
+	FovBox.Text = "FOV Radius: " .. tostring(fovRadius)
+	updateFovCircle()
+end)
+
+RearDistBox.FocusLost:Connect(function()
+	local num = tonumber(RearDistBox.Text:match("%d+"))
+	if num then
+		rearDistanceThreshold = math.clamp(num, 10, 300)
+	end
+	RearDistBox.Text = "Trigger Distance: " .. tostring(rearDistanceThreshold) .. " studs"
+end)
+
+-- Customization Panel Interactions
+BodyPartBtn.MouseButton1Click:Connect(function()
+	if selectedBodyPart == "Head" then
+		selectedBodyPart = "Torso"
+	elseif selectedBodyPart == "Torso" then
+		selectedBodyPart = "HumanoidRootPart"
+	elseif selectedBodyPart == "HumanoidRootPart" then
+		selectedBodyPart = "Legs"
+	elseif selectedBodyPart == "Legs" then
+		selectedBodyPart = "Arms"
+	else
+		selectedBodyPart = "Head"
+	end
+	BodyPartBtn.Text = "Aim Part: " .. selectedBodyPart
+end)
+
+FovThicknessBox.FocusLost:Connect(function()
+	local num = tonumber(FovThicknessBox.Text:match("[%d%.]+"))
+	if num then fovThickness = math.clamp(num, 0.5, 10) end
+	FovThicknessBox.Text = "FOV Thickness: " .. tostring(fovThickness)
+	updateFovCircle()
+end)
+
+FovTransBox.FocusLost:Connect(function()
+	local num = tonumber(FovTransBox.Text:match("%d+"))
+	if num then fovTransparency = math.clamp(num, 0, 100) end
+	FovTransBox.Text = "FOV Transparency: " .. tostring(fovTransparency) .. "%"
+	updateFovCircle()
+end)
+
+HighlightBtn.MouseButton1Click:Connect(function()
+	targetHighlightEnabled = not targetHighlightEnabled
+	HighlightBtn.BackgroundColor3 = targetHighlightEnabled and COLOR_ON or COLOR_OFF
+	HighlightBtn.Text = targetHighlightEnabled and "TARGET HIGHLIGHT: ON" or "TARGET HIGHLIGHT: OFF"
+end)
+
+SmoothnessBtn.MouseButton1Click:Connect(function()
+	cameraSmoothness = cameraSmoothness + 0.15
+	if cameraSmoothness > 1 then cameraSmoothness = 0.15 end
+	SmoothnessBtn.Text = "Camera Smoothness: " .. string.format("%.2f", cameraSmoothness)
+end)
+
+ThemeBtn.MouseButton1Click:Connect(function()
+	currentColorIndex = (currentColorIndex % #COLOR_PALETTES) + 1
+	local palette = COLOR_PALETTES[currentColorIndex]
+	COLOR_ACCENT = palette.Accent
+	COLOR_BG = palette.Bg
+	COLOR_SURFACE = palette.Surface
+
+	ThemeBtn.Text = "Theme: " .. palette.Name
+	MainFrame.BackgroundColor3 = COLOR_BG
+	LeftTitle.TextColor3 = COLOR_ACCENT
+	RightTitle.TextColor3 = COLOR_ACCENT
+	DragToggleButton.TextColor3 = COLOR_ACCENT
+
+	for _, stroke in ipairs(allStrokes) do
+		stroke.Color = COLOR_ACCENT
+	end
+	updateFovCircle()
+end)
+
+-- Dropdown Menu Expand / Collapse Logic
+local dropdownExpanded = false
+DropHeader.MouseButton1Click:Connect(function()
+	dropdownExpanded = not dropdownExpanded
+	local targetSize = dropdownExpanded and UDim2.new(1, 0, 0, 170) or UDim2.new(1, 0, 0, 34)
+	TweenService:Create(DropdownContainer, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Size = targetSize}):Play()
+	DropHeader.Text = dropdownExpanded and "Separate Button Creator  ▲" or "Separate Button Creator  ▼"
+end)
+
+-- Separate Mobile Floating Button Creator Function
+local function createSeparateButton(titleText, defaultColor, onClickCallback)
+	local sepBtn = Instance.new("TextButton")
+	sepBtn.Size = UDim2.new(0, 140, 0, 36)
+	sepBtn.Position = UDim2.new(0.8, 0, 0.2, 0)
+	sepBtn.BackgroundColor3 = defaultColor
+	sepBtn.TextColor3 = COLOR_TEXT
+	sepBtn.Text = titleText
+	sepBtn.Font = FONT_BOLD
+	sepBtn.TextSize = 11
+	sepBtn.Parent = ScreenGui
+	Instance.new("UICorner", sepBtn).CornerRadius = UDim.new(0, 8)
+	applyGlow(sepBtn, COLOR_ACCENT, 1)
+	makeDraggable(sepBtn)
+
+	sepBtn.MouseButton1Click:Connect(onClickCallback)
+	return sepBtn
+end
+
+optLock.MouseButton1Click:Connect(function()
+	if not separateLockBtn then
+		separateLockBtn = createSeparateButton(ToggleBtn.Text, ToggleBtn.BackgroundColor3, function()
+			ToggleBtn.MouseButton1Click:Fire()
+		end)
+	end
+end)
+
+optPriority.MouseButton1Click:Connect(function()
+	if not separatePriorityBtn then
+		separatePriorityBtn = createSeparateButton(PriorityBtn.Text, COLOR_SURFACE, function()
+			PriorityBtn.MouseButton1Click:Fire()
+		end)
+	end
+end)
+
+optRear.MouseButton1Click:Connect(function()
+	if not separateRearBtn then
+		separateRearBtn = createSeparateButton(RearToggleBtn.Text, RearToggleBtn.BackgroundColor3, function()
+			RearToggleBtn.MouseButton1Click:Fire()
+		end)
+	end
+end)
+
+optFov.MouseButton1Click:Connect(function()
+	if not separateFovBtn then
+		separateFovBtn = createSeparateButton("FOV: Visible", COLOR_SURFACE, function()
+			FovCanvas.Visible = not FovCanvas.Visible
+			separateFovBtn.Text = FovCanvas.Visible and "FOV: Visible" or "FOV: Hidden"
+		end)
+	end
+end)
+
+-- Menu Toggle Button Logic
+DragToggleButton.MouseButton1Click:Connect(function()
+	MainFrame.Visible = not MainFrame.Visible
+end)
+
+--------------------------------------------------------------------------------
+-- LOADING SCREEN ANIMATION
+--------------------------------------------------------------------------------
+task.spawn(function()
+	local tween = TweenService:Create(ProgressBar, TweenInfo.new(1.8, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Size = UDim2.new(1, 0, 1, 0)
+	})
+	tween:Play()
+	tween.Completed:Wait()
+
+	LoadingFrame.Visible = false
+	MainFrame.Visible = true
+	DragToggleButton.Visible = true
+end)
